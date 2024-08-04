@@ -20,7 +20,7 @@ impl FromStr for ShowArgs {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
+        Ok(match s.to_lowercase().as_str() {
             "pipelines" => ShowArgs::Pipelines,
             "projects" => ShowArgs::Projects,
             "repos" => ShowArgs::Repos,
@@ -51,7 +51,7 @@ pub async fn resgister(
                 data.data.lock().await.git_links.push(git_url);
                 "added. now tracking the requested repo."
             } else {
-                "that is not a valiud git link"
+                "that is not a valid git link"
             };
 
             ctx.say(response).await?;
