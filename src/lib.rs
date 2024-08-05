@@ -1,18 +1,21 @@
-use poise::serenity_prelude::futures::lock::Mutex;
-use serde::{Deserialize, Serialize};
-use std::{str::FromStr, sync::Arc};
+use anyhow::{ensure, Result};
+use clap::{Parser, Subcommand};
+use serenity::async_trait;
+use serenity::futures::lock::Mutex;
+use serenity::model::channel::Message;
+use serenity::model::gateway::Ready;
+use serenity::prelude::*;
+use std::str::FromStr;
+use std::sync::Arc;
 use url::Url;
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
-type Context<'a> = poise::Context<'a, Arc<Mutex<Data>>, Error>;
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum ShowArgs {
-    #[serde(rename = "pipelines")]
+    // #[serde(rename = "pipelines")]
     Pipelines,
-    #[serde(rename = "projects")]
+    // #[serde(rename = "projects")]
     Projects,
-    #[serde(rename = "repos")]
+    // #[serde(rename = "repos")]
     Repos,
 }
 
@@ -33,58 +36,112 @@ impl FromStr for ShowArgs {
     }
 }
 
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Register { git_link: Url },
+    Show { showable: ShowArgs },
+    // Help,
+}
+
 #[derive(Default)]
 pub struct Data {
     pub git_links: Vec<Url>,
 }
 
-/// registers a git repo to be able to CICD it.
-#[poise::command(slash_command, prefix_command)]
-pub async fn resgister(
-    ctx: Context<'_>,
-    #[description = "Git Clone link"] git_url: Url,
-) -> Result<(), Error> {
-    // TODO: add admin check
-    match ctx {
-        Context::Prefix(data) => {
-            let response = if git_url.to_string().ends_with(".git") {
-                data.data.lock().await.git_links.push(git_url);
-                "added. now tracking the requested repo."
-            } else {
-                "that is not a valid git link"
-            };
-
-            ctx.say(response).await?;
-        }
-        _ => {}
-    }
-    Ok(())
+#[derive(Default)]
+pub struct Handler {
+    data: Arc<Mutex<Data>>,
 }
 
-/// shows state information.
-#[poise::command(slash_command, prefix_command)]
-pub async fn show(
-    ctx: Context<'_>,
-    #[description = "Show what? Show this."] showable: ShowArgs,
-) -> Result<(), Error> {
-    // TODO: add admin check
+impl Handler {
+    async fn register(&self, git_link: Url) -> Result<String> {
+        ensure!(
+            git_link.to_string().ends_with(".git") && git_link.to_file_path().is_ok(),
+            "the provided link was not a valid git clone link"
+        );
 
-    // let data = match ctx {
-    //     Context::Prefix(data) => data.data.lock().await,
-    //     Context::Application(data) => data.data.lock().await,
-    // };
+        let project_name = git_link
+            .to_file_path()
+            .unwrap()
+            .to_string_lossy()
+            .replace(".git", "");
 
-    match ctx {
-        Context::Prefix(data) => {
-            let response = match showable {
-                ShowArgs::Repos => format!("{:?}", data.data.lock().await.git_links),
-                ShowArgs::Projects => "not yet programed".into(),
-                ShowArgs::Pipelines => "not yet programmed".into(),
-            };
+        self.data.lock().await.git_links.push(git_link.clone());
 
-            ctx.say(response).await?;
-        }
-        _ => {}
+        Ok(format!(
+            "added project `{project_name}` from git link {git_link}"
+        ))
     }
-    Ok(())
+
+    async fn show(&self, showable: ShowArgs) -> Result<String> {
+        Ok(match showable {
+            ShowArgs::Repos => format!("{:?}", self.data.lock().await.git_links),
+            show_thing => format!("/show {show_thing:?} is not implemented yet"),
+        })
+    }
+}
+
+#[async_trait]
+impl EventHandler for Handler {
+    // Set a handler for the `message` event. This is called whenever a new message is received.
+    //
+    // Event handlers are dispatched through a threadpool, and so multiple events can be
+    // dispatched simultaneously.
+    async fn message(&self, ctx: Context, msg: Message) {
+        println!("{msg:?}");
+
+        if !msg.content.starts_with("/") {
+            return;
+        } else if msg.content.to_lowercase().starts_with("/help") {
+            if let Err(why) = msg
+                .channel_id
+                .say(&ctx.http, "on a scale of 1 to 10 my firned you're fucked!")
+                .await
+            {
+                println!("Error sending message: {why:?}");
+            }
+
+            return;
+        }
+
+        // parse command using clap
+        let args = Cli::parse_from(msg.content.replacen("/", "", 1).split_whitespace());
+
+        let res = match args.command {
+            Commands::Register { git_link } => self.register(git_link).await,
+            Commands::Show { showable } => self.show(showable).await,
+            // Commands::Help => Ok("on a scale of 1 to 10 my firned you're fucked!".into()),
+        };
+
+        println!("{res:?}");
+
+        if let Err(why) = msg.channel_id.say(&ctx.http, format!("{res:?}")).await {
+            println!("Error sending message: {why:?}");
+        }
+
+        // if msg.content == "!ping" {
+        //     // Sending a message can fail, due to a network error, an authentication error, or lack
+        //     // of permissions to post in the channel, so log to stdout when some error happens,
+        //     // with a description of it.
+        //     if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
+        //         println!("Error sending message: {why:?}");
+        //     }
+        // }
+    }
+
+    // Set a handler to be called on the `ready` event. This is called when a shard is booted, and
+    // a READY payload is sent by Discord. This payload contains data like the current user's guild
+    // Ids, current user data, private channels, and more.
+    //
+    // In this case, just print what the current user's username is.
+    async fn ready(&self, _: Context, ready: Ready) {
+        println!("{} is connected!", ready.user.name);
+    }
 }
