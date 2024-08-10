@@ -1,0 +1,9 @@
+FROM docker:dind
+
+RUN mkdir /root/build-dir/
+COPY ./Dockerfile.runner /root/build-dir/Dockerfile
+VOLUME [ "/var/run/docker.sock:/var/run/docker.sock:rw" ]
+ENV DOCKER_HOST="unix://var/run/docker.sock"
+
+# ENTRYPOINT [ "" ]
+CMD [ "docker", "build", "/root/build-dir/.", "--build-arg='BASE_IMAGE=$BASE_IMAGE'", "-t", "$BASE_IMAGE:dcicd" ]

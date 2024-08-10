@@ -1,0 +1,34 @@
+=============== Aug 7, 2024 (EDT) ===============
+11:33:31.708209 log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed
+11:33:31.711079 db@open opening
+11:33:31.711320 version@stat F·[] S·0B[] Sc·[]
+11:33:31.713821 db@janitor F·2 G·0
+11:33:31.713846 db@open done T·2.746434ms
+=============== Aug 8, 2024 (EDT) ===============
+03:06:08.872309 log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed
+03:06:08.872543 version@stat F·[] S·0B[] Sc·[]
+03:06:08.872557 db@open opening
+03:06:08.872616 journal@recovery F·1
+03:06:08.872698 journal@recovery recovering @1
+03:06:08.874420 memdb@flush created L0@2 N·36 S·805B "act..igh,v26":"web..low,v17"
+03:06:08.874566 version@stat F·[1] S·805B[805B] Sc·[0.25]
+03:06:08.878315 db@janitor F·3 G·0
+03:06:08.878332 db@open done T·5.766708ms
+=============== Aug 8, 2024 (EDT) ===============
+05:46:13.969971 log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed
+05:46:13.970202 version@stat F·[1] S·805B[805B] Sc·[0.25]
+05:46:13.970214 db@open opening
+05:46:13.970262 journal@recovery F·1
+05:46:13.970328 journal@recovery recovering @3
+05:46:13.970543 version@stat F·[1] S·805B[805B] Sc·[0.25]
+05:46:13.974191 db@janitor F·3 G·0
+05:46:13.974217 db@open done T·3.992326ms
+=============== Aug 9, 2024 (EDT) ===============
+12:03:59.624177 log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed
+12:03:59.624803 version@stat F·[1] S·805B[805B] Sc·[0.25]
+12:03:59.624855 db@open opening
+12:03:59.625026 journal@recovery F·1
+12:03:59.625248 journal@recovery recovering @5
+12:03:59.625926 version@stat F·[1] S·805B[805B] Sc·[0.25]
+12:03:59.631909 db@janitor F·3 G·0
+12:03:59.631984 db@open done T·7.099303ms
