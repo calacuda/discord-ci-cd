@@ -1,6 +1,7 @@
+#![feature(async_closure)]
 use ci_cd::{Backend, BackendState, CiCdCmd, PipelineName, Repo, RepoName};
-use crossbeam::channel::{Receiver, Sender};
-use poise::serenity_prelude::futures::lock::Mutex;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use poise::serenity_prelude::futures::lock::{Mutex, MutexGuard};
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 use url::Url;
 
@@ -61,7 +62,7 @@ pub async fn resgister(
                 "that is not a valiud git link"
             };
 
-            ctx.say(response).await?;
+            ctx.reply(response).await?;
         }
         Context::Application(data) => {
             let response = if git_url.to_string().ends_with(".git") {
@@ -72,7 +73,7 @@ pub async fn resgister(
                 "that is not a valiud git link"
             };
 
-            ctx.say(response).await?;
+            ctx.reply(response).await?;
         }
     }
 
@@ -104,7 +105,7 @@ pub async fn show(
         ShowArgs::Pipelines => "not yet programmed".into(),
     };
 
-    ctx.say(response).await?;
+    ctx.reply(response).await?;
     Ok(())
 }
 
@@ -124,14 +125,15 @@ pub async fn load(
 
     // let backend_state = data.state.clone();
 
-    let mut backend = data.backend.lock().await;
-    let backend_state = backend.state.clone();
+    let backend = data.backend.lock().await;
+    let backend_state = { backend.state.lock().await.clone() };
 
     // println!("1");
 
-    let mut set_loaded_repo = || {
+    let set_loaded_repo = |mut s: MutexGuard<BackendState>| {
         if let Some(repo_url) = data.git_links.get(&repo) {
-            backend.state = BackendState::Available {
+            // let mut s = backend.state.lock().await;
+            *s = BackendState::Available {
                 repo: Repo {
                     repo_name: repo.clone(),
                     url: repo_url.to_owned(),
@@ -152,12 +154,16 @@ pub async fn load(
     // println!("2");
 
     let response = match backend_state {
-        BackendState::NotConfigured => set_loaded_repo(),
+        BackendState::NotConfigured => {
+            let s = backend.state.lock().await;
+            set_loaded_repo(s)
+        }
         BackendState::Available {
             repo: Repo { repo_name, url: _url },
         } => {
             if repo_name != repo {
-                set_loaded_repo()
+                let s = backend.state.lock().await;
+                set_loaded_repo(s)
             } else {
                 format!("{repo} is already loaded")
             }
@@ -170,7 +176,7 @@ pub async fn load(
 
     // println!("{response}");
 
-    ctx.say(response).await?;
+    ctx.reply(response).await?;
 
     Ok(())
 }
@@ -187,26 +193,42 @@ pub async fn run(
         Context::Application(data) => data.data.lock().await,
     };
 
-    let backend = data.backend.lock().await;
-    let backend_state = backend.state.clone();
+    // let backend = data.backend.lock().await;
+    let backend_state = {
+        data.backend.lock().await.state.lock().await.clone()
+    };
 
     let response = match backend_state {
-        BackendState::NotConfigured => "must `/load` a repo before running a pipeline.".into(),
+        BackendState::NotConfigured => "must `/load` a repo before running a pipeline.".to_string(),
         BackendState::Available {
             repo: Repo { repo_name: _, url },
         } => {
-            data.send_cmd.send(CiCdCmd::Clone(url))?;
-            data.send_cmd.send(CiCdCmd::RunPipeline(pipeline.clone()))?;
+            let (tx, rx) = unbounded();
 
-            format!("started pipline {pipeline}. use `/logs` to get logs.")
+            let send_f = move |msg| { if let Err(e) = tx.send(msg) { println!("{e}") } };
+            let send_f: Box<dyn Fn(String) + Send + Sync> = Box::new(send_f);
+
+            data.send_cmd.send(CiCdCmd::Clone(url))?;
+            // data.send_cmd.send(CiCdCmd::RunPipeline(pipeline.clone()))?;
+            data.send_cmd.send(CiCdCmd::RunPipeline { pipeline_name: pipeline.clone(), on_complete: send_f } )?;
+
+            ctx.reply(format!("started pipline {pipeline}. use `/logs` to get logs.")).await?;
+
+            println!("waiting");
+
+            if let Ok(mesg) = rx.recv() {
+                mesg.to_string()
+            } else {
+                "error retrieving logs.".to_string()
+            }
         }
         BackendState::RunningPipeline { 
             repo: Repo { repo_name, url: _url },
             pipeline 
-        } => format!("already running {pipeline} from the repository, {repo_name}. a new pipline cant be run until the current pipeline finishes.")
+        } => format!("already running {pipeline} from the repository, {repo_name}. a new pipline cant be run until the current pipeline finishes."),
     };
 
-    ctx.say(response).await?;
+    ctx.reply(response).await?;
 
     Ok(())
 }
