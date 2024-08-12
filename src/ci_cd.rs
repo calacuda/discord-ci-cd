@@ -51,10 +51,18 @@ pub enum BackendState {
     NotConfigured,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+// #[derive(Debug, Clone)]
+// #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+// #[derive(Clone)]
 pub enum CiCdCmd {
     Clone(Url),
-    RunPipeline(PipelineName),
+    RunPipeline {
+        pipeline_name: PipelineName,
+        // token: String,
+        // ctx: ,
+        on_complete: Box<dyn Fn(String) + Send + Sync>,
+        // on_complete: Context<'a>,
+    },
     GetLogs,
 }
 
@@ -66,21 +74,22 @@ pub enum CiCdCmd {
 #[derive(Debug)]
 pub struct Backend {
     /// tells if the back end is running, available, etc
-    pub state: BackendState,
+    pub state: Arc<Mutex<BackendState>>,
     pub repos: HashMap<RepoName, Url>,
     pub jh: JoinHandle<()>,
-    pub input: Receiver<CiCdCmd>,
+    // pub input: Receiver<CiCdCmd>,
     pub output: Sender<String>,
     pub logs: Arc<Mutex<String>>,
 }
 
 impl Backend {
-    pub fn new(input: Receiver<CiCdCmd>, output: Sender<String>) -> Self {
+    // pub fn new(input: Receiver<CiCdCmd>, output: Sender<String>) -> Self {
+    pub fn new(output: Sender<String>) -> Self {
         Self {
-            state: BackendState::default(),
+            state: Arc::new(Mutex::new(BackendState::default())),
             repos: HashMap::default(),
             jh: spawn(async { () }),
-            input,
+            // input,
             output,
             logs: Arc::new(Mutex::new(String::default())),
         }
@@ -92,15 +101,26 @@ impl Backend {
                 let logs = self.logs.lock().await.clone();
                 self.output.send(logs).unwrap();
             }
-            CiCdCmd::RunPipeline(pipeline_name) => {
-                match self.state {
-                    BackendState::Available { repo: _ } => {}
-                    _ => bail!("backend is not available to run jobs at the moment. pls wait for job to finish."),
-                }
+            // CiCdCmd::RunPipeline(pipeline_name) => {
+            CiCdCmd::RunPipeline {
+                pipeline_name,
+                on_complete,
+            } => {
+                println!("pre-repo");
+
+                let repo = {
+                    match self.state.lock().await.clone() {
+                        BackendState::Available { repo } => repo,
+                        _ => bail!("backend is not available to run jobs at the moment. pls wait for job to finish."),
+                    }
+                };
+
+                println!("{repo:?}");
 
                 // load repos pipeline file.
                 let mut pipeline_file: PathBuf = PathBuf::from(CACHE_DIR);
                 pipeline_file.push(PIPELINE_FILE);
+
                 let Ok(pipelines) = toml::from_str::<Pipelines>(
                     &read_to_string(&pipeline_file)
                         .await
@@ -143,31 +163,13 @@ impl Backend {
                     .run()?;
 
                 // TODO: run pipeline
-                self.jh = spawn(async move {
-                    // mount the git repo as a volume in a custom docker container at:
-                    // /home/dcicd-runner/repo/. have the docker container run the CiCd pipeline.
-                    // docker build docker-files/runner/. --build-arg="BASE_IMAGE=rust" -t test-runner
-                    if let Err(e) = launcher
-                        .run(RunOpt {
-                            image: "dcicd".into(),
-                            remove: true,
-                            volumes: vec![Volume {
-                                src: PathBuf::from(CACHE_DIR),
-                                dst: PathBuf::from("/home/dcicd-runner/repo/"),
-                                read_write: true,
-                                ..Default::default()
-                            }],
-                            command: Some(pipeline_name.into()),
-                            ..Default::default()
-                        })
-                        .run()
-                    {
-                        eprintln!("failed to launch runner. failed with error, {e}");
-                    }
-                });
+                let state = self.state.clone();
+                let logs = self.logs.clone();
+
+                self.jh = spawn(run(state, logs, on_complete, repo, pipeline_name, launcher));
             }
             CiCdCmd::Clone(url) => {
-                match self.state {
+                match *self.state.lock().await {
                     BackendState::Available { repo: _ } => {}
                     _ => bail!("backend is not available to clone at the moment. pls wait for job to finish."),
                 }
@@ -195,6 +197,78 @@ impl Backend {
     }
 }
 
+async fn run(
+    state: Arc<Mutex<BackendState>>,
+    logs: Arc<Mutex<String>>,
+    on_complete: Box<dyn Fn(String) + Send + Sync>,
+    repo: Repo,
+    pipeline_name: String,
+    launcher: Launcher,
+) {
+    {
+        let mut s = state.lock().await;
+        *s = BackendState::RunningPipeline {
+            repo: repo.clone(),
+            pipeline: pipeline_name.clone(),
+        };
+    }
+
+    // mount the git repo as a volume in a custom docker container at:
+    // /home/dcicd-runner/repo/. have the docker container run the CiCd pipeline.
+    // docker build docker-files/runner/. --build-arg="BASE_IMAGE=rust" -t test-runner
+    let res = launcher
+        .run(RunOpt {
+            image: "dcicd".into(),
+            remove: true,
+            volumes: vec![Volume {
+                src: PathBuf::from(CACHE_DIR),
+                dst: PathBuf::from("/home/dcicd-runner/repo/"),
+                read_write: true,
+                ..Default::default()
+            }],
+            command: Some(pipeline_name.into()),
+            ..Default::default()
+        })
+        .combine_output()
+        .enable_capture()
+        .run();
+
+    let mut l = logs.lock().await;
+
+    // if let Err(e) = res.map(|res| {
+    //     *l = String::from_utf8_lossy(&res.stdout).to_string();
+    //
+    //     on_complete(&format!("pipline run completed sucessfully.")).await;
+    //     // on_complete();
+    // }) {
+    //     eprintln!("failed to launch runner. failed with error, {e}");
+    //     *l = "failed to launch runner (Docker/Podman). failed with error, {e}".into();
+    // }
+
+    match res {
+        Ok(res) => {
+            *l = String::from_utf8_lossy(&res.stdout).to_string();
+
+            on_complete(format!(
+                "pipline run completed sucessfully. use `/logs` to view logs."
+            ));
+            // on_complete();
+        }
+        Err(e) => {
+            eprintln!("failed to launch runner. failed with error, {e}");
+            *l = "failed to launch runner (Docker/Podman). failed with error, {e}".into();
+            on_complete("pipline failed! use `/logs to view logs.".into());
+        }
+    }
+
+    println!("run done");
+
+    {
+        let mut s = state.lock().await;
+        *s = BackendState::Available { repo };
+    }
+}
+
 // impl Default for Backend {
 //     fn default() -> Self {
 //         Self {
@@ -214,12 +288,12 @@ impl Backend {
 //     }
 // }
 
-pub async fn run_backend(backend: Arc<Mutex<Backend>>) {
+pub async fn run_backend(input: Receiver<CiCdCmd>, backend: Arc<Mutex<Backend>>) {
     loop {
-        sleep(Duration::from_millis(500)).await;
+        sleep(Duration::from_millis(250)).await;
         let mut backend = backend.lock().await;
 
-        if let Ok(msg) = backend.input.try_recv() {
+        if let Ok(msg) = input.try_recv() {
             // println!("got message {msg:?}");
             if let Err(e) = backend.process(msg).await {
                 eprintln!("{e}");

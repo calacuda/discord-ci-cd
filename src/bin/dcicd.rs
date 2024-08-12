@@ -16,7 +16,7 @@ async fn main() {
     let intents = serenity::GatewayIntents::non_privileged();
     let (cmd_tx, cmd_rx) = unbounded();
     let (log_tx, log_rx) = unbounded();
-    let backend = Arc::new(Mutex::new(Backend::new(cmd_rx, log_tx)));
+    let backend = Arc::new(Mutex::new(Backend::new(log_tx)));
     let data = Data {
         git_links: HashMap::default(),
         backend: backend.clone(),
@@ -24,7 +24,7 @@ async fn main() {
         get_output: log_rx,
     };
 
-    spawn(run_backend(backend));
+    spawn(run_backend(cmd_rx, backend));
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
