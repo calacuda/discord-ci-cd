@@ -4,12 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.86"
+actix = "0.13.5"
+actix-broker = "0.4.3"
+actix-rt = "2.10.0"
+actix-web = "4.9.0"
+actix-web-actors = "4.3.1"
+anyhow = { version = "1.0.86", features = ["backtrace"] }
 crossbeam = { version = "0.8.4", features = ["crossbeam-channel", "nightly"] }
 docker-command = "5.0.1"
+futures-util = "0.3.30"
 git2 = "0.19.0"
 poise = "0.6.1"
 serde = { version = "1.0.204", features = ["derive"] }
+serde_json = "1.0.124"
 tokio = { version = "1.39.2", features = ["full"] }
+tokio-tungstenite = "0.23.1"
 toml = "0.8.19"
+tracing = { version = "0.1.40", features = ["async-await", "log", "log-always"] }
 url = { version = "2.5.2", features = ["serde"] }
